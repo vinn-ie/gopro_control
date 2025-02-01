@@ -103,11 +103,11 @@ class OpenGoProClient:
                         print("[Photo] Capture triggered.")
                     else:
                         print(f"[Photo] Capture failed: {capture_response.status_code if capture_response else 'No response'}")
-                        continue  # Skip to next loop iteration
+                        # continue  # Skip to next loop iteration
 
                     # Wait for the camera to process the photo
                     start_wait = time.monotonic()
-                    max_wait_time = 7  # Max time to wait for new media
+                    max_wait_time = 3  # Max time to wait for new media
                     wait_time = 0.5  # Start with a short wait time
                     new_media_list = None
 
@@ -173,8 +173,8 @@ class OpenGoProClient:
 
                     # Wait for the camera to process the photo (smarter polling)
                     start_wait = time.monotonic()
-                    max_wait_time = 7  # Reduce max wait time for new media
-                    wait_time = 2  # Start with a short wait time
+                    max_wait_time = 2  # Reduce max wait time for new media
+                    wait_time = 0.5  # Start with a short wait time
                     new_media_list = None
 
                     while time.monotonic() - start_wait < max_wait_time:
@@ -187,7 +187,6 @@ class OpenGoProClient:
                             print("[Photo] Camera is busy, retrying...")
                         
                         time.sleep(wait_time)
-                        wait_time = min(wait_time * 2, 1.0)  # Exponential backoff, max 1s
 
                     if not new_media_list:
                         print("[Photo] Failed to retrieve new media list.")
@@ -197,15 +196,20 @@ class OpenGoProClient:
                     new_files = list(set(new_media_list) - set(media_list))
                     if new_files:
                         latest_photo = sorted(new_files)[-1]
-                        print(f"[Photo] New image detected: {latest_photo}")
+                        
+                        # Only download if the file is a JPG
+                        if latest_photo.lower().endswith(".jpg"):
+                            print(f"[Photo] New image detected: {latest_photo}")
+                            
+                            # Start download in a separate thread to allow next capture faster
+                            # download_thread = threading.Thread(target=self.download_and_delete, args=(latest_photo,))
+                            # download_thread.start()
+                            self.download_and_delete(latest_photo)
 
-                        # Start download in a separate thread to allow next capture faster
-                        # download_thread = threading.Thread(target=self.download_and_delete, args=(latest_photo,))
-                        # download_thread.start()
-                        self.download_and_delete(latest_photo)
-
-                        # Update media list for the next iteration
-                        media_list = new_media_list
+                            # Update media list for the next iteration
+                            media_list = new_media_list
+                        else:
+                            print(f"[Photo] Skipping non-JPG file: {latest_photo}")
                     else:
                         print("[Photo] No new image detected.")
 
