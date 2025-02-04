@@ -28,7 +28,7 @@ DELETE_FROM_SD = True
 KEEP_ALIVE_INTERVAL_SEC = 3
 
 class OpenGoProClient:
-    def __init__(self, ip, port, preset):
+    def __init__(self, ip: str, port: str, preset: str, model: str):
         self.base_url = f"http://{ip}:{port}"
         self.media_url = f"http://{ip}:8080/videos/DCIM"
         self.camera_preset_id = preset
@@ -36,6 +36,7 @@ class OpenGoProClient:
         self.photo_interval = 0
         self.latest_media = None
         self.running = True
+        self.model = model
         self.lock = threading.Lock()  # Lock to prevent overlapping requests
 
 
@@ -90,12 +91,6 @@ class OpenGoProClient:
             if now - last_photo_time >= self.photo_interval:
                 last_photo_time = now  # Update last photo time
 
-                # # Check if camera is busy
-                # if self.get_camera_status() == 1:
-                #     print("[Photo] Camera is busy, skipping capture attempt.")
-                #     time.sleep(0.5)  # Wait before retrying
-                #     continue
-
                 try:
                     # Trigger photo capture
                     capture_response = self.get(f"{self.base_url}/gopro/camera/shutter/start")
@@ -112,18 +107,17 @@ class OpenGoProClient:
                     new_media_list = None
 
                     while time.monotonic() - start_wait < max_wait_time:
-                        # if self.get_camera_status() == 1:
-                        if 0:
-                            print("[Photo] Camera is still processing, waiting...")
+                        if self.model == "Hero12" or self.model == "Hero13":
+                            # Use get last media API call for efficiency
+                            new_media = self.get_last_media()
                         else:
-                            after_files_response = self.get(f"{self.base_url}/gopro/media/list")
-                            if after_files_response and after_files_response.status_code == 200:
-                                new_media_list = self.get_media_list()
-                                if new_media_list and len(new_media_list) > len(media_list):
-                                    break  # Found new media, stop polling
+                            # Have to download entire media list
+                            new_media_list = self.get_media_list()
+                            if new_media_list and len(new_media_list) > len(media_list):
+                                break  # Found new media, stop polling
+                                
 
                         time.sleep(wait_time)
-                        # wait_time = min(wait_time * 2, 1.0)  # Exponential backoff
 
                     if not new_media_list:
                         print("[Photo] Failed to retrieve new media list.")
@@ -149,89 +143,33 @@ class OpenGoProClient:
 
             time.sleep(0.02)  # Reduce CPU usage while still allowing fast response
 
-    def timelapse_photo_download(self):
-        """Continuously downloads images with minimal delay."""
-
-        # Trigger timelapse capture
-        capture_response = self.get(f"{self.base_url}/gopro/camera/shutter/start")
-        if capture_response and capture_response.status_code == 200:
-            print("[Photo] Capture triggered.")
-        else:
-            print(f"[Photo] Capture failed: {capture_response.status_code if capture_response else 'No response'}")
-        
-        last_photo_time = time.monotonic() - self.photo_interval  # Ensures an immediate trigger
-        media_list = self.get_media_list()  # Get initial media list once
-
-        while self.running:
-            now = time.monotonic()
-
-            # Check if it's time to take a new photo
-            if now - last_photo_time >= self.photo_interval:
-                last_photo_time = now  # Update last photo time
-
-                try:
-
-                    # Wait for the camera to process the photo (smarter polling)
-                    start_wait = time.monotonic()
-                    max_wait_time = 2  # Reduce max wait time for new media
-                    wait_time = 0.5  # Start with a short wait time
-                    new_media_list = None
-
-                    while time.monotonic() - start_wait < max_wait_time:
-                        after_files_response = self.get(f"{self.base_url}/gopro/media/list")
-                        if after_files_response and after_files_response.status_code == 200:
-                            new_media_list = self.get_media_list()
-                            if new_media_list and len(new_media_list) > len(media_list):
-                                break  # Found new media, stop polling
-                        elif after_files_response and after_files_response.status_code == 503:
-                            print("[Photo] Camera is busy, retrying...")
-                        
-                        time.sleep(wait_time)
-
-                    if not new_media_list:
-                        print("[Photo] Failed to retrieve new media list.")
-                        continue
-
-                    # Identify the new file
-                    new_files = list(set(new_media_list) - set(media_list))
-                    if new_files:
-                        latest_photo = sorted(new_files)[-1]
-                        
-                        # Only download if the file is a JPG
-                        if latest_photo.lower().endswith(".jpg"):
-                            print(f"[Photo] New image detected: {latest_photo}")
-                            
-                            # Start download in a separate thread to allow next capture faster
-                            # download_thread = threading.Thread(target=self.download_and_delete, args=(latest_photo,))
-                            # download_thread.start()
-                            self.download_and_delete(latest_photo)
-
-                            # Update media list for the next iteration
-                            media_list = new_media_list
-                        else:
-                            print(f"[Photo] Skipping non-JPG file: {latest_photo}")
-                    else:
-                        print("[Photo] No new image detected.")
-
-                except Exception as e:
-                    print(f"[Photo] Error: {e}")
-
-            time.sleep(0.02)  # Reduce CPU usage while still allowing fast response
+    def get_last_media(self):
+        try:
+            response = self.get(f"{self.base_url}/gopro/media/last_captured")
+            if response and response.status_code == 200:
+                new_media = response.json()
+                print("[Get lastest media] ")
+                print(new_media)
+                print(new_media.folder)
+                print(new_media.file)
+        except Exception as e:
+            print(f"[Media] Error fetching last media: {e}")
+        return []
 
     def get_media_list(self):
         """Retrieves a list of media files on the GoPro."""
         try:
             response = self.get(f"{self.base_url}/gopro/media/list")
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 media_list = response.json()
                 if "media" in media_list and len(media_list["media"]) > 0:
                     folder = media_list["media"][0]["d"]
                     files = [f"{folder}/{item['n']}" for item in media_list["media"][0]["fs"]]
                     return files
-            print("[Media] No media found.")
+            # print("[Media] No media found.")
         except Exception as e:
             print(f"[Media] Error fetching media list: {e}")
-        return []
+        return None
     
     def download_and_delete(self, filename):
         """Downloads and optionally deletes the photo."""
@@ -369,10 +307,11 @@ if __name__ == "__main__":
     parser.add_argument("--ip", required=True, help="GoPro Camera IP Address")
     parser.add_argument("--port", default="8080", help="GoPro API Port (default: 8080)")
     parser.add_argument("--preset", default="65536", help="GoPro Preset ID (default: 65536)")
+    parser.add_argument("--model", default="Hero10", help="GoPro model (Hero10, Hero11)")
     # parser.add_argument("--preset", default="131073", help="GoPro Preset ID (default: 131073)")
     # parser.add_argument("--mode", default="timelapse", help="Mode - timelapse, photo")
     # parser.add_argument("-v", "--verbose", action='store_true')
     args = parser.parse_args()
 
-    client = OpenGoProClient(args.ip, args.port, args.preset)
+    client = OpenGoProClient(args.ip, args.port, args.preset, args.model)
     client.start()
